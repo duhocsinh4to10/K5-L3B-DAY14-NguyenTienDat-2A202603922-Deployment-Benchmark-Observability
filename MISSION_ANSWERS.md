@@ -101,6 +101,40 @@ content-type: application/json
 
 ---
 
+## Part 3: Cloud Deployment
+
+### Exercise 3.1: Deploy Agent Part 6 lên Cloud (Railway / Render)
+
+- **Nền tảng:** Railway / Render *(cập nhật sau khi deploy service `06-lab-complete/` kèm Redis trên cloud)*
+- **Public URL:** *(điền URL thật sau khi deploy, xem [DEPLOYMENT.md](DEPLOYMENT.md))*
+- **Screenshots:**
+  - [Dashboard](screenshots/dashboard.png)
+  - [Service Running](screenshots/running.png)
+  - [Self-Test Results (200 / 200 / 401 / 200)](screenshots/test.png)
+
+---
+
+### Exercise 3.2: So sánh `railway.toml` với `render.yaml`
+
+| Tiêu chí | `railway.toml` (Railway) | `render.yaml` (Render Blueprint) | Tại sao khác nhau? |
+| :--- | :--- | :--- | :--- |
+| **Định dạng & Phạm vi** | Định dạng TOML, cấu hình **một service** duy nhất (`[build]`, `[deploy]`). | Định dạng YAML theo chuẩn Infrastructure as Code (Blueprint), khai báo được **cả stack nhiều service** trong cùng 1 file (`services:` gồm web + Redis). | Railway quản lý từng service và add-on (Redis, Postgres) theo project trên Dashboard/CLI rồi nối biến môi trường; Render dùng Blueprint để đồng bộ toàn bộ hạ tầng từ Git. |
+| **Cách build & chạy** | Khai báo `builder = "DOCKERFILE"` (hoặc `"NIXPACKS"`), `dockerfilePath`, `startCommand`. | Khai báo `type: web`, `runtime: docker` (hoặc `python`), `dockerfilePath` / `buildCommand` & `startCommand`, kèm `region`, `plan`, `autoDeploy`. | Render yêu cầu mô tả tường minh loại service, gói tài nguyên (`plan: free`) và vùng triển khai (`region: singapore`) ngay trong file IaC. |
+| **Health check & Restart** | `healthcheckPath = "/health"`, `healthcheckTimeout = 30`, `restartPolicyType = "ON_FAILURE"`, `restartPolicyMaxRetries = 3`. | `healthCheckPath: /health` (nền tảng tự quản lý chính sách restart và zero-downtime deploy). | Cả hai đều cần `/health` để kiểm tra container sống; Railway cho tinh chỉnh chi tiết timeout và số lần retry ngay trong file TOML. |
+| **Quản lý biến môi trường & Secret** | **Không** khai báo biến môi trường trong `railway.toml`; đặt qua Dashboard hoặc `railway variables set ...`. | Cho phép khai báo `envVars:` trực tiếp trong `render.yaml`, dùng `generateValue: true` (tự sinh key ngẫu nhiên) hoặc `sync: false` (nhập tay trên Dashboard) để **không lộ secret trong Git**. | Render Blueprint thiết kế để tái tạo nhanh cả cấu hình biến môi trường khi clone repo mới mà vẫn giữ an toàn cho secret. |
+
+---
+
+### Exercise 3.3: Phân tích CI/CD Pipeline của GCP Cloud Run (`cloudbuild.yaml` & `service.yaml`)
+
+Đọc `03-cloud-deployment/production-cloud-run/cloudbuild.yaml` và `service.yaml`, pipeline CI/CD tự động chạy khi push lên nhánh `main` đi qua **4 bước tuần tự** (`waitFor`):
+1. **`test` (`python:3.11-slim`):** Cài dependencies và chạy `pytest tests/ -v --tb=short` — nếu test lỗi thì dừng pipeline ngay, không build/deploy.
+2. **`build` (`gcr.io/cloud-builders/docker`):** Build Docker image gắn 2 tag (`$COMMIT_SHA` để truy vết/rollback và `latest`), tận dụng `--cache-from=...:latest` để tăng tốc build.
+3. **`push` (`gcr.io/cloud-builders/docker`):** Đẩy toàn bộ tags lên Google Container Registry (`gcr.io/$PROJECT_ID/ai-agent`).
+4. **`deploy` (`gcr.io/cloud-builders/gcloud`):** Deploy image theo `$COMMIT_SHA` lên Cloud Run (`asia-southeast1`), cấu hình tài nguyên (`512Mi` RAM, `1 CPU`, `timeout=60s`), auto-scaling (`min-instances=1` tránh cold start, `max-instances=10`, `containerConcurrency=80`), gắn secret an toàn từ **Secret Manager** (`--set-secrets` / `secretKeyRef`) và kiểm tra `livenessProbe` (`/health`) cùng `startupProbe` (`/ready`).
+
+---
+
 ## Part 4: API Security
 
 ### Exercise 4.1: API Key Authentication (`04-api-gateway/develop/app.py`)
@@ -223,3 +257,7 @@ content-type: application/json
   - *Hỏi gì:* Nhờ AI hoàn thiện toàn bộ 12 file TODO trong `06-lab-complete/` (`config.py`, `redis_client.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, `main.py`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml`) theo đúng bảng hợp đồng trong `06-lab-complete/README.md`.
   - *Nhận gì:* Code FastAPI production-ready với Redis sliding-window rate limit, Redis daily/monthly cost guard, API key auth (401), JSON logging, lifespan + SIGTERM graceful shutdown và multi-stage Dockerfile non-root.
   - *Tự sửa và tự kiểm tra:* Đã chạy `python check_production_ready.py --static-only` đạt **28/28 static checks** và `--skip-docker` đạt **36/37 checks** (chỉ còn 1 mục `/ready` 200 + các mục Docker/SIGTERM cần chạy lại trong WSL2 khi bật Docker Desktop để lấy `PASS 12/12`).
+- **CP6 (Part 3 — Cloud Deployment):**
+  - *Hỏi gì:* Nhờ AI đọc `03-cloud-deployment/railway/railway.toml`, `render/render.yaml`, `production-cloud-run/cloudbuild.yaml`, `service.yaml` để viết phần so sánh Railway vs Render, phân tích CI/CD Cloud Run (Exercise 3.3) và tạo khung `DEPLOYMENT.md`.
+  - *Nhận gì:* Bảng so sánh chi tiết `railway.toml` vs `render.yaml`, tóm tắt 4 bước pipeline Cloud Build/Cloud Run và file `DEPLOYMENT.md` kèm 4 lệnh tự kiểm CP6.
+  - *Tự sửa và tự kiểm tra:* Đã đối chiếu đúng tên trường cấu hình trong từng file (`builder`, `healthcheckPath`, `sync: false`, `generateValue: true`, `minScale`, `secretKeyRef`). Phần Public URL và 3 screenshot sẽ cập nhật sau khi deploy lên Railway/Render.
