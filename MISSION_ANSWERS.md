@@ -99,9 +99,119 @@ content-type: application/json
 
 ---
 
+---
+
+## Part 4: API Security
+
+### Exercise 4.1: API Key Authentication (`04-api-gateway/develop/app.py`)
+
+**Phân tích mã nguồn:**
+- **API key được kiểm tra ở đâu?** Tại hàm dependency `verify_api_key` (`04-api-gateway/develop/app.py` dòng 39–54) đọc header `X-API-Key` qua `APIKeyHeader(name="X-API-Key", auto_error=False)`, được gắn vào endpoint `POST /ask` bằng `Depends(verify_api_key)` (dòng 70). Các endpoint public như `/` và `/health` không yêu cầu key.
+- **Điều gì xảy ra nếu thiếu hoặc sai key?** Thiếu header `X-API-Key` trả `HTTP 401 Unauthorized`; sai key trả `HTTP 403 Forbidden` (ở Part 6 production sẽ chuẩn hóa trả `401` cho cả thiếu và sai key theo hợp đồng).
+- **Làm sao xoay vòng (rotate) API key không gây downtime?** Hỗ trợ danh sách nhiều key hợp lệ cùng lúc (ví dụ biến môi trường `AGENT_API_KEYS=old-key,new-key`): (1) thêm key mới song song key cũ, (2) cập nhật client sang key mới, (3) xác nhận không còn traffic dùng key cũ rồi gỡ key cũ và thu hồi (revoke).
+
+**Kết quả chạy thực tế (`AGENT_API_KEY=secret-key-123 python app.py`):**
+
+1. Không có API key (`401`):
+```http
+HTTP/1.1 401 Unauthorized
+content-type: application/json
+
+{"detail":"Missing API key. Include header: X-API-Key: <your-key>"}
+```
+
+2. Sai API key (`403`):
+```http
+HTTP/1.1 403 Forbidden
+content-type: application/json
+
+{"detail":"Invalid API key."}
+```
+
+3. Có API key hợp lệ (`200`):
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+
+{"question":"Hello","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé."}
+```
+
+---
+
+### Exercise 4.2 & 4.3: JWT Authentication & Rate Limiting (`04-api-gateway/production/`)
+
+**Phân tích JWT (`auth.py`) & Rate Limiter (`rate_limiter.py`):**
+- **Luồng JWT:** Client gửi `username`/`password` lên `POST /auth/token` → server xác thực và ký JWT bằng thuật toán `HS256` chứa `sub`, `role`, `iat`, `exp` (hết hạn sau 60 phút). Khi gọi `POST /ask` với `Authorization: Bearer <token>`, `verify_token()` xác minh chữ ký và hạn dùng stateless (không cần query DB mỗi request).
+- **Thuật toán Rate Limiting:** `Sliding Window Counter` (dùng `deque` lưu timestamp các request trong cửa sổ `window_seconds = 60` giây; mỗi request mới sẽ `popleft()` các timestamp cũ hơn `now - 60`).
+- **Giới hạn & Phân quyền (bypass/nâng hạn mức cho admin):** Trong `rate_limiter.py` (dòng 86–87) và `app.py` (dòng 141), user thường (`student`, role `user`) giới hạn **10 requests/phút** (`rate_limiter_user`), còn admin (`teacher`, role `admin`) có hạn mức **100 requests/phút** (`rate_limiter_admin`) — hoặc có thể bỏ qua bước `limiter.check()` nếu `role == "admin"`.
+
+**Kết quả chạy thực tế (`POST /auth/token` với `student` / `demo123` → token đã che `eyJhbGciOiJIUzI...<REDACTED>`):**
+
+1. Request đầu tiên với JWT hợp lệ (`200 OK`):
+```http
+HTTP/1.1 200 OK
+content-type: application/json
+x-content-type-options: nosniff
+x-frame-options: DENY
+x-xss-protection: 1; mode=block
+referrer-policy: strict-origin-when-cross-origin
+
+{"question":"Explain JWT","answer":"Tôi là AI agent được deploy lên cloud. Câu hỏi của bạn đã được nhận.","usage":{"requests_remaining":9,"budget_remaining_usd":1.9e-05}}
+```
+
+2. Vòng lặp gửi liên tiếp 12 request (Request 1–10 trả `200 OK`, từ Request 11 vượt 10 req/phút trả `429 Too Many Requests`):
+```text
+Req 2  -> HTTP/1.1 200 OK
+Req 3  -> HTTP/1.1 200 OK
+Req 4  -> HTTP/1.1 200 OK
+Req 5  -> HTTP/1.1 200 OK
+Req 6  -> HTTP/1.1 200 OK
+Req 7  -> HTTP/1.1 200 OK
+Req 8  -> HTTP/1.1 200 OK
+Req 9  -> HTTP/1.1 200 OK
+Req 10 -> HTTP/1.1 200 OK
+Req 11 -> HTTP/1.1 429 Too Many Requests
+Req 12 -> HTTP/1.1 429 Too Many Requests
+```
+
+3. Response chi tiết khi chạm ngưỡng Rate Limit (`429`):
+```http
+HTTP/1.1 429 Too Many Requests
+x-ratelimit-limit: 10
+x-ratelimit-remaining: 0
+x-ratelimit-reset: 1795684671
+retry-after: 59
+content-type: application/json
+
+{"detail":{"error":"Rate limit exceeded","limit":10,"window_seconds":60,"retry_after_seconds":59}}
+```
+
+4. Kiểm tra usage tại `GET /me/usage`:
+```json
+{"user_id":"student","date":"2026-11-26","requests":10,"input_tokens":40,"output_tokens":288,"cost_usd":0.000179,"budget_usd":1.0,"budget_remaining_usd":0.999821,"budget_used_pct":0.0}
+```
+
+---
+
+### Exercise 4.4: Thiết kế Cost Guard & Vì sao cần cả Rate Limit lẫn Cost Guard
+
+- **Cách triển khai Cost Guard trong production (dùng Redis):**
+  - Tạo key theo chu kỳ ngày/tháng trên Redis, ví dụ `cost:daily:<YYYY-MM-DD>` hoặc `budget:<user_id>:<YYYY-MM>`.
+  - **Trước khi gọi LLM (`check_budget`):** đọc tổng chi phí hiện tại từ Redis (`GET`). Nếu `current_cost >= budget_limit` (hoặc `current_cost + estimated_cost > budget_limit`), chặn ngay bằng `HTTP 402 Payment Required` (và ghi log cảnh báo khi vượt 80% ngân sách).
+  - **Sau khi gọi LLM (`record_cost`):** tính chi phí thực tế theo bảng giá token: `(input_tokens / 1000) * PRICE_INPUT_PER_1K + (output_tokens / 1000) * PRICE_OUTPUT_PER_1K`, cộng dồn atomic bằng `INCRBYFLOAT` và đặt `EXPIRE` (ví dụ 2 ngày cho daily budget hoặc 32 ngày cho monthly budget) để tự động reset.
+- **Vì sao cần đồng thời cả Rate Limit và Cost Guard?**
+  - **Rate Limit bảo vệ tốc độ (traffic / chống spam / chống DDoS):** giới hạn số request trên mỗi đơn vị thời gian (req/phút), nhưng không phân biệt request ngắn (10 tokens) với request cực dài (50.000 tokens). Kẻ tấn công vẫn có thể gửi đều đặn dưới ngưỡng rate limit với prompt rất dài để đốt sạch tiền API.
+  - **Cost Guard bảo vệ ngân sách (tiền):** chặn tổng chi phí cộng dồn theo ngày/tháng, nhưng không ngăn được đột biến lưu lượng (burst) làm quá tải CPU/worker tức thời. Vì vậy production cần cả hai lớp bảo vệ song song.
+
+---
+
 ## AI Log
 
 - **CP1 (Part 1):**
   - *Hỏi gì:* Nhờ AI đọc code `01-localhost-vs-production/develop/app.py`, `production/app.py`, `production/config.py`, chạy kiểm thử thực tế cả hai server để thu output HTTP/stdout và tổng hợp câu trả lời Part 1 theo yêu cầu đề bài.
   - *Nhận gì:* Danh sách 7 anti-patterns có trích dẫn dòng code cụ thể, bảng so sánh Develop vs Production, cùng kết quả chạy thực tế.
   - *Tự sửa và tự kiểm tra:* Đã chạy trực tiếp cả `develop/app.py` và `production/app.py` trên máy để xác nhận thực tế endpoint `POST /ask?question=Hello` của bản develop in lộ key `sk-hardcoded-fake-key-never-do-this`, còn bản production trả `200 OK` cho `/health`, `/ready` và `POST /ask` dạng JSON.
+- **CP3 (Part 4):**
+  - *Hỏi gì:* Nhờ AI đọc code `04-api-gateway/develop/app.py`, `production/app.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, chạy kiểm thử API Key, JWT và vòng lặp kích hoạt HTTP 429, sau đó tổng hợp câu trả lời Part 4 vào `MISSION_ANSWERS.md`.
+  - *Nhận gì:* Kết quả chạy thực tế `401`, `403`, `200`, `429`, `/me/usage` (đã che JWT token) cùng phần giải thích cơ chế Sliding Window và thiết kế Cost Guard với Redis.
+  - *Tự sửa và tự kiểm tra:* Đã chạy trực tiếp server develop với `AGENT_API_KEY=secret-key-123` và server production với tài khoản `student`/`demo123`, xác nhận request thứ 11 bị chặn với `HTTP 429` và header `retry-after: 59`.
