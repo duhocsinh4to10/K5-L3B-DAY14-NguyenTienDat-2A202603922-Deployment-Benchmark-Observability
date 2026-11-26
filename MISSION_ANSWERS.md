@@ -406,6 +406,41 @@ Total messages: 10
 
 ---
 
+## Part 6: Final Project (`06-lab-complete/`) — Kết quả `check_production_ready.py`
+
+Chạy kiểm tra đầy đủ (POSIX + Docker Engine `29.9.3` + Redis tạm thời + `SIGTERM` + `docker stop`):
+
+```text
+================================================================
+  📋 Checklist Deliverable
+     ✅ Dockerfile (multi-stage, < 500 MB)
+     ✅ docker-compose.yml (agent + redis)
+     ✅ .dockerignore
+     ✅ Health check endpoint (GET /health)
+     ✅ Readiness endpoint (GET /ready)
+     ✅ API Key authentication
+     ✅ Rate limiting
+     ✅ Cost guard
+     ✅ Config từ environment variables
+     ✅ Structured logging
+     ✅ Graceful shutdown
+     ✅ Public URL ready (Railway / Render config)
+----------------------------------------------------------------
+  Result: 12/12 tiêu chí đạt · 43/43 checks passed
+  🎉 PASS 12/12 — PRODUCTION READY! Deploy nào!
+================================================================
+```
+
+Một số thông số đo thực tế từ script chấm:
+- **Docker image:** `297 MB` (< `500 MB`), build thành công, chạy user non-root `appuser`, `GET /health → 200`.
+- **Rate limiting & Stateless:** Trả `429` sau `5` request thành công (`RATE_LIMIT_PER_MINUTE=5`); sau khi restart agent vẫn trả `429` nhờ lưu sliding window trong Redis.
+- **Readiness:** `GET /ready → 200` khi có Redis; trả `503` khi mất kết nối Redis (trong khi `/health` vẫn `200`).
+- **Cost guard:** Trả `402` khi ngân sách cạn (`DAILY_BUDGET_USD=0.000001`).
+- **Structured logging:** `17` dòng log JSON hợp lệ.
+- **Graceful shutdown:** `SIGTERM` lúc đang có request → request vẫn trả `200`, process thoát `exit code 0`; `docker stop` thoát `exit code 0` trong `0.9s` (< `10s`).
+
+---
+
 ## AI Log
 
 - **CP1 (Part 1):**
@@ -423,7 +458,7 @@ Total messages: 10
 - **CP5 (Part 6 — Final Project `06-lab-complete/`):**
   - *Hỏi gì:* Nhờ AI hoàn thiện toàn bộ 12 file TODO trong `06-lab-complete/` (`config.py`, `redis_client.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, `main.py`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.env.example`, `railway.toml`, `render.yaml`) theo đúng bảng hợp đồng trong `06-lab-complete/README.md`.
   - *Nhận gì:* Code FastAPI production-ready với Redis sliding-window rate limit, Redis daily/monthly cost guard, API key auth (401), JSON logging, lifespan + SIGTERM graceful shutdown và multi-stage Dockerfile non-root.
-  - *Tự sửa và tự kiểm tra:* Đã chạy `python check_production_ready.py --static-only` đạt **28/28 static checks** và `--skip-docker` đạt **36/37 checks** (chỉ còn 1 mục `/ready` 200 + các mục Docker/SIGTERM cần chạy lại trong WSL2 khi bật Docker Desktop để lấy `PASS 12/12`).
+  - *Tự sửa và tự kiểm tra:* Đã chạy `python check_production_ready.py` đầy đủ trong môi trường POSIX + Docker Engine `29.9.3` và xác nhận đạt **`PASS 12/12` (43/43 checks passed, exit code 0)** với image `297 MB`, `docker stop` thoát `exit code 0` trong `0.9s`.
 - **CP6 (Part 3 — Cloud Deployment):**
   - *Hỏi gì:* Nhờ AI đọc `03-cloud-deployment/railway/railway.toml`, `render/render.yaml`, `production-cloud-run/cloudbuild.yaml`, `service.yaml` để viết phần so sánh Railway vs Render, phân tích CI/CD Cloud Run (Exercise 3.3) và tạo khung `DEPLOYMENT.md`.
   - *Nhận gì:* Bảng so sánh chi tiết `railway.toml` vs `render.yaml`, tóm tắt 4 bước pipeline Cloud Build/Cloud Run và file `DEPLOYMENT.md` kèm 4 lệnh tự kiểm CP6.
