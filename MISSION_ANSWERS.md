@@ -1,7 +1,5 @@
 # Day 14 Lab — Mission Answers
 
-> **Học viên:** Nguyen Tien Dat (`2A202603922`) — Lớp `K5-L3B`
-
 ---
 
 ## Part 1: Localhost vs Production
@@ -96,8 +94,6 @@ content-type: application/json
 | **Logging** | Dùng `print()` dạng text tự do, in cả API key ra màn hình | Dùng `logging` định dạng JSON có cấu trúc (`time`, `level`, `event`, metadata), không log secret | Log JSON giúp các hệ thống giám sát (Loki, Datadog, Cloud Logging) parse, lọc, đếm lỗi và cảnh báo tự động mà không làm lộ thông tin nhạy cảm. |
 | **Shutdown** | Tắt đột ngột khi nhận tín hiệu dừng | Dùng FastAPI `lifespan` + bắt `SIGTERM`, hạ cờ `is_ready = False` trước khi thoát | Đảm bảo Zero-downtime deployment: hoàn thành nốt các request đang xử lý (`in-flight`) và đóng kết nối DB/Redis an toàn, không trả lỗi 502/504 cho người dùng. |
 | **API Input & CORS** | `POST /ask` dùng query parameter `?question=...`, không có CORS | `POST /ask` đọc JSON body có kiểm tra `422`, có `CORSMiddleware` giới hạn `ALLOWED_ORIGINS` | Tránh lộ nội dung câu hỏi trên access log URL, hỗ trợ payload dài và ngăn truy cập trái phép từ domain lạ trên trình duyệt. |
-
----
 
 ---
 
