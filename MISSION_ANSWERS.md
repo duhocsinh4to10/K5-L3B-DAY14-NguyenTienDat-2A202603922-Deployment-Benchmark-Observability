@@ -101,6 +101,100 @@ content-type: application/json
 
 ---
 
+## Part 2: Docker Containerization
+
+### Exercise 2.1: Trả lời 4 câu hỏi về `02-docker/develop/Dockerfile`
+
+1. **Base image là gì?**
+   - `python:3.11` (full Debian + Python distribution + compiler/tool mặc định, dung lượng gốc rất lớn ~1 GB+).
+2. **Working directory là gì?**
+   - `/app` (`WORKDIR /app`), là thư mục làm việc bên trong container nơi `requirements.txt`, `app.py` và `utils/mock_llm.py` được copy vào và thực thi.
+3. **Tại sao `COPY requirements.txt` phải đứng trước `COPY . .` (hay `COPY app.py`)?**
+   - Để tận dụng **Docker layer cache**. Các file dependencies (`requirements.txt`) ít thay đổi hơn mã nguồn (`app.py`). Khi đặt `COPY requirements.txt` + `RUN pip install` ở trên, những lần sửa code sau Docker sẽ dùng lại cache tầng `pip install` mà không phải tải và cài lại toàn bộ thư viện, rút ngắn thời gian build từ vài phút xuống vài giây.
+4. **`CMD` khác `ENTRYPOINT` thế nào?**
+   - **`CMD`** là lệnh/tham số mặc định khi chạy container và **dễ dàng bị ghi đè** khi người dùng truyền thêm lệnh ở cuối `docker run <image> <command>`.
+   - **`ENTRYPOINT`** cố định chương trình thực thi chính của container (các tham số ở cuối `docker run` sẽ được nối vào làm đối số cho `ENTRYPOINT`; muốn đổi phải dùng cờ `--entrypoint`).
+
+---
+
+### Exercise 2.2: Build và chạy container `my-agent:develop`
+
+- Build từ gốc repo: `docker build -f 02-docker/develop/Dockerfile -t my-agent:develop .`
+- Chạy container: `docker run -d --rm -p 8000:8000 my-agent:develop`
+- Kết quả test `curl -i -X POST "http://localhost:8000/ask?question=What%20is%20Docker?"`:
+```http
+HTTP/1.1 200 OK
+server: uvicorn
+content-type: application/json
+
+{"answer":"Container là cách đóng gói app để chạy ở mọi nơi. Build once, run anywhere!"}
+```
+
+---
+
+### Exercise 2.3: Multi-stage build & So sánh kích thước Image
+
+**Phân tích `02-docker/production/Dockerfile`:**
+- **Stage 1 (`builder` — `FROM python:3.11-slim AS builder`):** Cài đặt các build tools (`gcc`, `libpq-dev`) và biên dịch/cài toàn bộ thư viện Python từ `requirements.txt` vào `/root/.local` (`pip install --no-cache-dir --user`).
+- **Stage 2 (`runtime` — `FROM python:3.11-slim AS runtime`):** Tạo user non-root `appuser`, chỉ copy kết quả các gói đã cài (`/root/.local` → `/home/appuser/.local`) cùng mã nguồn `main.py` và `utils/mock_llm.py`, bổ sung `HEALTHCHECK` và chạy `uvicorn` bằng `USER appuser`.
+- **Tại sao image nhỏ hơn?** Stage cuối dùng base `python:3.11-slim` gọn nhẹ và **loại bỏ hoàn toàn** compiler (`gcc`), header C (`libpq-dev`), cache tải về của `apt`/`pip` ở stage `builder`, vừa giảm dung lượng mạnh vừa thu hẹp bề mặt tấn công bảo mật.
+
+**Số liệu đo thực tế bằng `docker images` và `docker image inspect`:**
+```text
+REPOSITORY:TAG      SIZE
+my-agent:advanced   240MB
+my-agent:develop    1.67GB
+```
+- **Develop (`my-agent:develop`):** `1590.5 MiB` (`1.67 GB` theo `docker images`)
+- **Production (`my-agent:advanced`):** `228.7 MiB` (`240 MB` theo `docker images`)
+- **Chênh lệch:** Giảm **85.6%** dung lượng (nhỏ hơn ~7 lần, đạt chuẩn `< 500 MB`).
+
+---
+
+### Exercise 2.4: Docker Compose Stack (`02-docker/production/docker-compose.yml`)
+
+**Sơ đồ kiến trúc các service (giao tiếp qua bridge network nội bộ `internal`):**
+```text
+Client ──(HTTP :80)──▶ Nginx (reverse proxy / LB, rate limit 10 req/s)
+                           │
+                           ▼ (proxy_pass http://agent:8000)
+                       Agent (FastAPI + uvicorn, không expose port ra ngoài)
+                        ├──(redis://redis:6379/0)──▶ Redis (session cache & rate limit, volume redis_data)
+                        └──(http://qdrant:6333)────▶ Qdrant (vector DB cho RAG, volume qdrant_data)
+```
+
+**Trạng thái stack (`docker compose -p k5-day14-docker ps`):**
+```text
+NAME                       IMAGE                   SERVICE   STATUS                    PORTS
+k5-day14-docker-agent-1    k5-day14-docker-agent   agent     Up 16 seconds (healthy)   8000/tcp
+k5-day14-docker-nginx-1    nginx:alpine            nginx     Up 15 seconds             0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+k5-day14-docker-qdrant-1   qdrant/qdrant:v1.9.0    qdrant    Up 26 seconds (healthy)   6333-6334/tcp
+k5-day14-docker-redis-1    redis:7-alpine          redis     Up 26 seconds (healthy)   6379/tcp
+```
+
+**Kết quả test qua Nginx (cổng `80`):**
+- `GET http://localhost/health`:
+```http
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: application/json
+X-Frame-Options: DENY
+X-Content-Type-Options: nosniff
+X-XSS-Protection: 1; mode=block
+
+{"status":"ok","uptime_seconds":14.2,"version":"2.0.0","timestamp":"2026-11-26T09:44:01.905276"}
+```
+- `POST http://localhost/ask` với `{"question":"Explain microservices"}`:
+```http
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: application/json
+
+{"answer":"Đây là câu trả lời từ AI agent (mock). Trong production, đây sẽ là response từ OpenAI/Anthropic."}
+```
+
+---
+
 ## Part 3: Cloud Deployment
 
 ### Exercise 3.1: Deploy Agent Part 6 lên Cloud (Railway / Render)
@@ -261,3 +355,7 @@ content-type: application/json
   - *Hỏi gì:* Nhờ AI đọc `03-cloud-deployment/railway/railway.toml`, `render/render.yaml`, `production-cloud-run/cloudbuild.yaml`, `service.yaml` để viết phần so sánh Railway vs Render, phân tích CI/CD Cloud Run (Exercise 3.3) và tạo khung `DEPLOYMENT.md`.
   - *Nhận gì:* Bảng so sánh chi tiết `railway.toml` vs `render.yaml`, tóm tắt 4 bước pipeline Cloud Build/Cloud Run và file `DEPLOYMENT.md` kèm 4 lệnh tự kiểm CP6.
   - *Tự sửa và tự kiểm tra:* Đã đối chiếu đúng tên trường cấu hình trong từng file (`builder`, `healthcheckPath`, `sync: false`, `generateValue: true`, `minScale`, `secretKeyRef`). Phần Public URL và 3 screenshot sẽ cập nhật sau khi deploy lên Railway/Render.
+- **CP2 (Part 2 — Docker):**
+  - *Hỏi gì:* Nhờ AI đọc các Dockerfile và `docker-compose.yml` trong `02-docker/`, build thật `my-agent:develop` & `my-agent:advanced`, chạy container + Docker Compose stack qua Nginx và ghi số liệu đo thực tế vào `MISSION_ANSWERS.md`.
+  - *Nhận gì:* 4 câu trả lời Ex 2.1, kết quả đo thật kích thước 2 image (`1.67 GB` vs `240 MB`, giảm `85.6%`), sơ đồ kiến trúc stack và output `curl` qua Nginx.
+  - *Tự sửa và tự kiểm tra:* Đã build và kiểm tra trực tiếp bằng Docker Engine `29.9.3`, xác nhận cả 4 container (`nginx`, `agent`, `redis`, `qdrant`) đều `healthy`, `GET /health` và `POST /ask` trả `200 OK`, sau đó dọn sạch bằng `docker compose -p k5-day14-docker down -v`.
