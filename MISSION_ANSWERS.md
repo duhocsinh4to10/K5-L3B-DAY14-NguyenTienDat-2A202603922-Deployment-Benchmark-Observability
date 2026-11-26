@@ -99,8 +99,6 @@ content-type: application/json
 
 ---
 
----
-
 ## Part 2: Docker Containerization
 
 ### Exercise 2.1: Trả lời 4 câu hỏi về `02-docker/develop/Dockerfile`
