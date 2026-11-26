@@ -1,0 +1,35 @@
+services:
+  - type: keyvalue
+    name: day14-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+  - type: web
+    name: day14-production-agent
+    runtime: docker
+    plan: free
+    region: singapore
+    rootDir: 06-lab-complete
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "10"
+      - key: DAILY_BUDGET_USD
+        value: "1.0"
+      - key: MONTHLY_BUDGET_USD
+        value: "10.0"
+      - key: AGENT_API_KEY
+        generateValue: true
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: day14-redis
+          property: connectionString
