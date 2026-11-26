@@ -333,6 +333,79 @@ content-type: application/json
 
 ---
 
+## Part 5: Scaling & Reliability
+
+### Exercise 5.1: Liveness (`/health`) vs Readiness (`/ready`) (`05-scaling-reliability/develop/app.py`)
+
+| Endpoint | Loại probe | Câu hỏi trả lời | Khi nào trả `200` / non-`200` | Hành động của Platform / Load Balancer khi fail |
+| :--- | :--- | :--- | :--- | :--- |
+| **`GET /health`** | **Liveness probe** | Process container còn sống không? | Luôn trả `200` khi process còn sống và phản hồi được (kể cả khi Redis tạm mất kết nối). | Platform (Docker / Kubernetes / Railway) sẽ **restart container** vì coi process đã bị treo/deadlock. |
+| **`GET /ready`** | **Readiness probe** | Instance đã sẵn sàng nhận traffic chưa? | Trả `200` khi đã khởi tạo xong và kết nối tốt với dependencies (Redis/DB); trả **`503`** khi đang khởi động, đang shutdown (`_is_ready = False`) hoặc mất kết nối Redis. | Load Balancer **ngừng route traffic mới** tới instance đó nhưng **không restart** container, tránh việc restart dây chuyền cả cụm khi Redis gặp sự cố ngắn. |
+
+---
+
+### Exercise 5.2: Graceful Shutdown với `SIGTERM`
+
+- Khi container orchestrator muốn dừng hoặc rolling-deploy phiên bản mới, nó gửi tín hiệu **`SIGTERM`** trước (rồi chờ grace period, mặc định 10–30 giây, trước khi gửi `SIGKILL` không thể bắt được).
+- Trong `05-scaling-reliability/develop/app.py`, ứng dụng dùng:
+  1. Middleware `track_requests` đếm số request đang xử lý (`_in_flight_requests`).
+  2. FastAPI `lifespan`: khi shutdown lập tức đặt `_is_ready = False` (để `/ready` trả `503`, Load Balancer không đẩy request mới vào), chờ các request in-flight hoàn thành (tối đa `timeout_graceful_shutdown=30`), đóng kết nối sạch rồi thoát với **exit code `0`**.
+  3. Đăng ký signal handler cho `SIGTERM` (lưu ý khi tự đăng ký handler trong `uvicorn`, phải gọi lại handler gốc của `uvicorn`, và trong Dockerfile phải dùng `exec uvicorn ...` để `uvicorn` là **PID 1** nhận trực tiếp `SIGTERM`).
+
+---
+
+### Exercise 5.3: Thiết kế Stateless với Redis
+
+- **Tại sao lưu state trong RAM (in-memory dict) bị hỏng khi scale nhiều instance?**
+  - Khi chạy 3 instance phía sau Nginx Load Balancer (round-robin), Request 1 của user A có thể vào `instance-1` (lưu lịch sử hội thoại trong RAM của `instance-1`), nhưng Request 2 lại được điều hướng sang `instance-2` (RAM trống → mất sạch ngữ cảnh hội thoại). Hơn nữa nếu một instance crash hoặc restart, toàn bộ dữ liệu trong RAM bị mất.
+- **Giải pháp Stateless:** Chuyển toàn bộ state dùng chung (lịch sử hội thoại, bộ đếm rate limit, chi phí cost guard) ra kho lưu trữ tập trung bên ngoài như **Redis**. Mọi instance đều giống hệt nhau, có thể tự do thêm/bớt/restart bất kỳ lúc nào mà không gián đoạn trải nghiệm người dùng.
+
+---
+
+### Exercise 5.4 & 5.5: Chạy stack 3 instances + Redis + Nginx & Test Stateless (`05-scaling-reliability/production/`)
+
+**Lệnh chạy:**
+```bash
+cd 05-scaling-reliability/production
+touch .env.local
+docker compose -p k5-day14-scaling up -d --build --scale agent=3
+python test_stateless.py
+docker compose -p k5-day14-scaling down -v
+```
+
+**Trạng thái 3 instance agent + Redis + Nginx (`docker compose -p k5-day14-scaling ps`):**
+```text
+NAME                       IMAGE                    SERVICE   STATUS                    PORTS
+k5-day14-scaling-agent-1   k5-day14-scaling-agent   agent     Up 16 seconds (healthy)   8000/tcp
+k5-day14-scaling-agent-2   k5-day14-scaling-agent   agent     Up 16 seconds (healthy)   8000/tcp
+k5-day14-scaling-agent-3   k5-day14-scaling-agent   agent     Up 15 seconds (healthy)   8000/tcp
+k5-day14-scaling-nginx-1   nginx:alpine             nginx     Up 15 seconds             0.0.0.0:8080->80/tcp
+k5-day14-scaling-redis-1   redis:7-alpine           redis     Up 27 seconds (healthy)   6379/tcp
+```
+
+**Kết quả chạy thực tế `python test_stateless.py` (gửi 5 câu vào `POST http://localhost:8080/chat` và đọc `GET /chat/{session_id}/history`):**
+```text
+Session ID: a35d4749-efc7-448d-bec9-f62aa228a6a9
+
+Request 1: [instance-5a3b32]  Q: What is Docker?
+Request 2: [instance-11afd9]  Q: Why do we need containers?
+Request 3: [instance-eef5e3]  Q: What is Kubernetes?
+Request 4: [instance-5a3b32]  Q: How does load balancing work?
+Request 5: [instance-11afd9]  Q: What is Redis used for?
+
+Total requests: 5
+Instances used: {'instance-11afd9', 'instance-5a3b32', 'instance-eef5e3'}
+✅ All requests served despite different instances!
+
+--- Conversation History ---
+Total messages: 10
+✅ Session history preserved across all instances via Redis!
+```
+
+**Giải thích kết quả:** Nginx phân phối đều 5 request lần lượt qua cả **3 instance khác nhau** (`instance-5a3b32`, `instance-11afd9`, `instance-eef5e3`) theo vòng tròn (round-robin). Dù mỗi câu hỏi được một container khác nhau xử lý, khi gọi `/chat/{session_id}/history` vẫn thu đủ toàn bộ **10 tin nhắn** (5 câu hỏi + 5 câu trả lời) của phiên `a35d4749-efc7-448d-bec9-f62aa228a6a9`, chứng minh thiết kế stateless lưu session trên Redis hoạt động chính xác.
+
+---
+
 ## AI Log
 
 - **CP1 (Part 1):**
@@ -359,3 +432,7 @@ content-type: application/json
   - *Hỏi gì:* Nhờ AI đọc các Dockerfile và `docker-compose.yml` trong `02-docker/`, build thật `my-agent:develop` & `my-agent:advanced`, chạy container + Docker Compose stack qua Nginx và ghi số liệu đo thực tế vào `MISSION_ANSWERS.md`.
   - *Nhận gì:* 4 câu trả lời Ex 2.1, kết quả đo thật kích thước 2 image (`1.67 GB` vs `240 MB`, giảm `85.6%`), sơ đồ kiến trúc stack và output `curl` qua Nginx.
   - *Tự sửa và tự kiểm tra:* Đã build và kiểm tra trực tiếp bằng Docker Engine `29.9.3`, xác nhận cả 4 container (`nginx`, `agent`, `redis`, `qdrant`) đều `healthy`, `GET /health` và `POST /ask` trả `200 OK`, sau đó dọn sạch bằng `docker compose -p k5-day14-docker down -v`.
+- **CP4 (Part 5 — Scaling & Reliability):**
+  - *Hỏi gì:* Nhờ AI đọc `05-scaling-reliability/develop/app.py`, `production/docker-compose.yml`, `test_stateless.py`, chạy stack 3 instances agent + Redis + Nginx và tổng hợp kết quả Part 5 vào `MISSION_ANSWERS.md`.
+  - *Nhận gì:* Bảng so sánh `/health` vs `/ready`, cơ chế `SIGTERM` graceful shutdown, lý do thiết kế stateless cùng output thật của `test_stateless.py`.
+  - *Tự sửa và tự kiểm tra:* Đã chạy trực tiếp `docker compose -p k5-day14-scaling up -d --build --scale agent=3` và `python test_stateless.py`, xác nhận 5 request phân tán đều qua 3 instance (`instance-5a3b32`, `instance-11afd9`, `instance-eef5e3`) và lịch sử lưu đủ 10 tin nhắn qua Redis, sau đó dọn bằng `down -v`.
