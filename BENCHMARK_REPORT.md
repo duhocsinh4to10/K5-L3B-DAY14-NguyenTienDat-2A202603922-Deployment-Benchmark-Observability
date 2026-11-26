@@ -2,7 +2,7 @@
 
 > Mọi con số dưới đây được đo trực tiếp từ `load_test.py`, `eval/run_eval.py` và đối chiếu 100% với các file JSON trong thư mục `reports/` và CSV trong `benchmark-results/`.
 
-**Họ tên:** Nguyen Tien Dat (`2A202603922`) — Lớp `K5-L3B`  
+**Họ tên:** Nguyễn Tiến Đạt (`2A202603922`) — Lớp `L3B`  
 **Ngày chạy:** 2026-11-26  
 **Môi trường:** Windows 11, Python 3.14 (`.venv`), WSL2 Ubuntu + Docker Desktop
 
