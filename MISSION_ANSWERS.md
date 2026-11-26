@@ -195,10 +195,15 @@ Content-Type: application/json
 
 ## Part 3: Cloud Deployment
 
-### Exercise 3.1: Deploy Agent Part 6 lên Cloud (Railway / Render)
+### Exercise 3.1: Deploy Agent Part 6 lên Cloud (Render Blueprint)
 
-- **Nền tảng:** Railway / Render *(cập nhật sau khi deploy service `06-lab-complete/` kèm Redis trên cloud)*
-- **Public URL:** *(điền URL thật sau khi deploy, xem [DEPLOYMENT.md](DEPLOYMENT.md))*
+- **Nền tảng:** **Render** (Blueprint `render.yaml` gồm `day14-production-agent` Docker từ `06-lab-complete/` + `day14-redis` Free Key Value tại region Singapore)
+- **Public URL:** https://day14-production-agent-yqmv.onrender.com (chi tiết tại [DEPLOYMENT.md](DEPLOYMENT.md))
+- **Kết quả 4 lệnh tự kiểm CP6 trên URL public:**
+  - `GET /health` → **`200`** (`{"status":"ok","environment":"production","uptime_seconds":148.4}`)
+  - `GET /ready` → **`200`** (`{"ready":true,"redis":"connected"}`)
+  - `POST /ask` (không có `X-API-Key`) → **`401`**
+  - `POST /ask` (có `X-API-Key`) → **`200`** (`{"question":"Hello","answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé.","environment":"production","usage":{"input_tokens":1,"output_tokens":16,"cost_usd":9.75e-06}}`)
 - **Screenshots:**
   - [Dashboard](screenshots/dashboard.png)
   - [Service Running](screenshots/running.png)
@@ -460,7 +465,7 @@ Một số thông số đo thực tế từ script chấm:
 - **CP6 (Part 3 — Cloud Deployment):**
   - *Hỏi gì:* Nhờ AI đọc `03-cloud-deployment/railway/railway.toml`, `render/render.yaml`, `production-cloud-run/cloudbuild.yaml`, `service.yaml` để viết phần so sánh Railway vs Render, phân tích CI/CD Cloud Run (Exercise 3.3) và tạo khung `DEPLOYMENT.md`.
   - *Nhận gì:* Bảng so sánh chi tiết `railway.toml` vs `render.yaml`, tóm tắt 4 bước pipeline Cloud Build/Cloud Run và file `DEPLOYMENT.md` kèm 4 lệnh tự kiểm CP6.
-  - *Tự sửa và tự kiểm tra:* Đã đối chiếu đúng tên trường cấu hình trong từng file (`builder`, `healthcheckPath`, `sync: false`, `generateValue: true`, `minScale`, `secretKeyRef`). Phần Public URL và 3 screenshot sẽ cập nhật sau khi deploy lên Railway/Render.
+  - *Tự sửa và tự kiểm tra:* Đã deploy thành công lên **Render** qua Blueprint `render.yaml` (`day14-redis` + `day14-production-agent`) tại `https://day14-production-agent-yqmv.onrender.com`, xác nhận cả 4 lệnh tự kiểm CP6 trả đúng `200`, `200` (`redis: connected`), `401`, `200`, không lộ `AGENT_API_KEY` trong code hay ảnh chụp.
 - **CP2 (Part 2 — Docker):**
   - *Hỏi gì:* Nhờ AI đọc các Dockerfile và `docker-compose.yml` trong `02-docker/`, build thật `my-agent:develop` & `my-agent:advanced`, chạy container + Docker Compose stack qua Nginx và ghi số liệu đo thực tế vào `MISSION_ANSWERS.md`.
   - *Nhận gì:* 4 câu trả lời Ex 2.1, kết quả đo thật kích thước 2 image (`1.67 GB` vs `240 MB`, giảm `85.6%`), sơ đồ kiến trúc stack và output `curl` qua Nginx.
