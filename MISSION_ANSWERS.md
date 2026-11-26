@@ -1,6 +1,6 @@
 # Day 14 Lab — Mission Answers
 
-> **Học viên:** Nguyen Tien Dat (`2A202603922`) — Lớp `K5-L3B`
+> **Học viên:** Nguyễn Tiến Đạt (`2A202603922`) — Lớp `L3B`
 
 ---
 
