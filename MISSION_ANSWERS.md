@@ -215,3 +215,7 @@ content-type: application/json
   - *Hỏi gì:* Nhờ AI đọc code `04-api-gateway/develop/app.py`, `production/app.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, chạy kiểm thử API Key, JWT và vòng lặp kích hoạt HTTP 429, sau đó tổng hợp câu trả lời Part 4 vào `MISSION_ANSWERS.md`.
   - *Nhận gì:* Kết quả chạy thực tế `401`, `403`, `200`, `429`, `/me/usage` (đã che JWT token) cùng phần giải thích cơ chế Sliding Window và thiết kế Cost Guard với Redis.
   - *Tự sửa và tự kiểm tra:* Đã chạy trực tiếp server develop với `AGENT_API_KEY=secret-key-123` và server production với tài khoản `student`/`demo123`, xác nhận request thứ 11 bị chặn với `HTTP 429` và header `retry-after: 59`.
+- **CP7 (Part 7 Bước 1 — Benchmark Local & Eval):**
+  - *Hỏi gì:* Nhờ AI thêm Histogram `agent_question_length_chars`, chạy đủ 7 kịch bản load test + 3 lần eval (`v1`, `v2`, `v2_fixed`), bổ sung 2 mục thiếu vào `KNOWLEDGE_BASE`, viết `.github/workflows/eval.yml` và tổng hợp số liệu thật vào `BENCHMARK_REPORT.md`.
+  - *Nhận gì:* 10 file JSON đo thật trong `reports/`, workflow CI quality gate và bảng phân tích SLO/tail latency/cost-per-correct trong `BENCHMARK_REPORT.md`.
+  - *Tự sửa và tự kiểm tra:* Đã đối chiếu từng con số trong `BENCHMARK_REPORT.md` khớp chính xác với 10 file JSON; chạy `eval/run_eval.py --min-accuracy 1.0 --baseline reports/eval_v2.json` xác nhận đạt `100.0% (23/23)`, `0 regression`, `Quality gate ✅ PASS`.
